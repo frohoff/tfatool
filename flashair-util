@@ -34,6 +34,8 @@ actions.add_argument("-S", "--sync-once", default=False,
                           "REMOTE_DIR to LOCAL_DIR, then quit")
 
 setup = parser.add_argument_group("Setup")
+setup.add_argument("-u", "--url", default=info.URL,
+                   help="FlashAir base URL (default: {})".format(info.URL))
 setup.add_argument("-y", "--sync-direction", choices=["up", "down", "both"],
                    help="'up' to upload, 'down' to download, 'both' for both "
                         "(default: down)",
@@ -41,6 +43,8 @@ setup.add_argument("-y", "--sync-direction", choices=["up", "down", "both"],
 setup.add_argument("-r", "--remote-dir", default=info.DEFAULT_REMOTE_DIR,
                    help="FlashAir directory to work with (default: {})".format(
                         info.DEFAULT_REMOTE_DIR))
+setup.add_argument("-R", "--recursive", action="store_true",
+                   help="recursively sync all subdirectories")
 setup.add_argument("-d", "--local-dir", default=".",
                    help="local directory to work with (default: working dir)")
 
@@ -96,6 +100,10 @@ def run():
             late = latest_date.format("YYYY-MM-DD HH:mm:ss")
         logger.info("Filtering from [{}] to [{}]".format(early, late))
 
+    # Ensure URL has trailing slash
+    if not args.url.endswith('/'):
+        args.url = args.url + '/'
+
     try:
         if args.list_files:
             print_file_list(filters, args)
@@ -143,7 +151,8 @@ def sync_once(methods, filters, args):
     for by_method in methods:
         try:
             by_method(*filters, remote_dir=args.remote_dir,
-                      local_dir=args.local_dir, count=args.n_files)
+                      local_dir=args.local_dir, count=args.n_files,
+                      url=args.url, recursive=args.recursive)
         except KeyboardInterrupt:
             break
 
@@ -166,7 +175,7 @@ def _sync_loop(filters, args):
     while True:
         new_files = run_method(
             *filters, local_dir=args.local_dir,
-            remote_dir=args.remote_dir)
+            remote_dir=args.remote_dir, url=args.url)
         logger.info("Waiting for newly arrived files...")
         try:
             while True:
@@ -184,11 +193,14 @@ _fields = ["filename", "date", "time", "MB", "created"]
 
 
 def print_file_list(filters, args, count_only=False):
-    files = command.list_files(*filters, remote_dir=args.remote_dir)
+    if args.recursive:
+        files = command.list_files_recursive(*filters, remote_dir=args.remote_dir, url=args.url)
+    else:
+        files = command.list_files(*filters, remote_dir=args.remote_dir, url=args.url)
     files = list(files)
     rows = util.fmt_file_rows(files)
     table = tabulate.tabulate(rows, headers=_fields, tablefmt="simple")
-    print("\nFiles in {}".format(args.remote_dir))
+    print("\nFiles in {}{}".format(args.remote_dir, " (recursive)" if args.recursive else ""))
     if not count_only:
         print()
         print(table)

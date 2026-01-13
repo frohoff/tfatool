@@ -27,6 +27,21 @@ def list_files(*filters, remote_dir=DEFAULT_REMOTE_DIR, url=URL):
     return (f for f in files if all(filt(f) for filt in filters))
 
 
+def list_files_recursive(*filters, remote_dir=DEFAULT_REMOTE_DIR, url=URL):
+    """Recursively list all files in remote_dir and its subdirectories."""
+    dirs_to_scan = [remote_dir]
+    while dirs_to_scan:
+        current_dir = dirs_to_scan.pop(0)
+        response = _get(Operation.list_files, url, DIR=current_dir)
+        for fileinfo in _split_file_list(response.text):
+            # Check if this is a directory (attribute.directly is True for directories)
+            if fileinfo.attribute.directly:
+                dirs_to_scan.append(fileinfo.path)
+            else:
+                if all(filt(fileinfo) for filt in filters):
+                    yield fileinfo
+
+
 def map_files_raw(*filters, remote_dir=DEFAULT_REMOTE_DIR, url=URL):
     files = list_files_raw(*filters, remote_dir=remote_dir, url=url)
     return {f.filename: f for f in files}

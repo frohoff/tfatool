@@ -81,7 +81,7 @@ class Monitor:
 
 
 def up_down_by_arrival(*filters, local_dir=".",
-                       remote_dir=DEFAULT_REMOTE_DIR):
+                       remote_dir=DEFAULT_REMOTE_DIR, url=URL):
     """Monitors a local directory and a remote FlashAir directory and
     generates sets of new files to be uploaded or downloaded.
     Sets to upload are generated in a tuple
@@ -89,7 +89,7 @@ def up_down_by_arrival(*filters, local_dir=".",
     are generated in a tuple like (Direction.down, {...}). The generator yields
     before each upload or download actually takes place."""
     local_monitor = watch_local_files(*filters, local_dir=local_dir)
-    remote_monitor = watch_remote_files(*filters, remote_dir=remote_dir)
+    remote_monitor = watch_remote_files(*filters, remote_dir=remote_dir, url=url)
     _, lfile_set = next(local_monitor)
     _, rfile_set = next(remote_monitor)
     _notify_sync_ready(len(lfile_set), local_dir, remote_dir)
@@ -102,7 +102,7 @@ def up_down_by_arrival(*filters, local_dir=".",
         if local_arrivals:
             new_names.update(f.filename for f in local_arrivals)
             _notify_sync(Direction.up, local_arrivals)
-            up_by_files(local_arrivals, remote_dir)
+            up_by_files(local_arrivals, remote_dir, url=url)
             _notify_sync_ready(len(local_set), local_dir, remote_dir)
         new_remote, remote_set = new_remote
         remote_arrivals = {f for f in new_remote if f.filename not in processed}
@@ -111,11 +111,11 @@ def up_down_by_arrival(*filters, local_dir=".",
             new_names.update(f.filename for f in remote_arrivals)
             _notify_sync(Direction.down, remote_arrivals)
             yield Direction.down, remote_arrivals
-            down_by_files(remote_arrivals, local_dir)
+            down_by_files(remote_arrivals, local_dir, url=url)
             _notify_sync_ready(len(remote_set), remote_dir, local_dir)
 
 
-def up_by_arrival(*filters, local_dir=".", remote_dir=DEFAULT_REMOTE_DIR):
+def up_by_arrival(*filters, local_dir=".", remote_dir=DEFAULT_REMOTE_DIR, url=URL):
     """Monitors a local directory and
     generates sets of new files to be uploaded to FlashAir.
     Sets to upload are generated in a tuple like (Direction.up, {...}).
@@ -127,22 +127,22 @@ def up_by_arrival(*filters, local_dir=".", remote_dir=DEFAULT_REMOTE_DIR):
         yield Direction.up, new_arrivals  # where new_arrivals is possibly empty
         if new_arrivals:
             _notify_sync(Direction.up, new_arrivals)
-            up_by_files(new_arrivals, remote_dir)
+            up_by_files(new_arrivals, remote_dir, url=url)
             _notify_sync_ready(len(file_set), local_dir, remote_dir)
 
 
-def down_by_arrival(*filters, local_dir=".", remote_dir=DEFAULT_REMOTE_DIR):
+def down_by_arrival(*filters, local_dir=".", remote_dir=DEFAULT_REMOTE_DIR, url=URL):
     """Monitors a remote FlashAir directory and generates sets of
     new files to be downloaded from FlashAir.
     Sets to download are generated in a tuple like (Direction.down, {...}).
     The generator yields AFTER each download actually takes place."""
-    remote_monitor = watch_remote_files(*filters, remote_dir=remote_dir)
+    remote_monitor = watch_remote_files(*filters, remote_dir=remote_dir, url=url)
     _, file_set = next(remote_monitor)
     _notify_sync_ready(len(file_set), remote_dir, local_dir)
     for new_arrivals, file_set in remote_monitor:
         if new_arrivals:
             _notify_sync(Direction.down, new_arrivals)
-            down_by_files(new_arrivals, local_dir)
+            down_by_files(new_arrivals, local_dir, url=url)
             _notify_sync_ready(len(file_set), remote_dir, local_dir)
         yield Direction.down, new_arrivals
 
@@ -150,37 +150,71 @@ def down_by_arrival(*filters, local_dir=".", remote_dir=DEFAULT_REMOTE_DIR):
 ###################################################
 # Sync ONCE in the DOWN (from FlashAir) direction
 
-def down_by_all(*filters, remote_dir=DEFAULT_REMOTE_DIR, local_dir=".", **_):
-    files = command.list_files(*filters, remote_dir=remote_dir)
-    down_by_files(files, local_dir=local_dir)
+def down_by_all(*filters, remote_dir=DEFAULT_REMOTE_DIR, local_dir=".",
+                url=URL, recursive=False, **_):
+    if recursive:
+        files = command.list_files_recursive(*filters, remote_dir=remote_dir, url=url)
+    else:
+        files = command.list_files(*filters, remote_dir=remote_dir, url=url)
+    down_by_files(files, local_dir=local_dir, url=url,
+                  base_remote_dir=remote_dir if recursive else None)
 
 
-def down_by_files(to_sync, local_dir="."):
-    """Sync a given list of files from `command.list_files` to `local_dir` dir"""
+def down_by_files(to_sync, local_dir=".", url=URL, base_remote_dir=None):
+    """Sync a given list of files from `command.list_files` to `local_dir` dir.
+
+    If base_remote_dir is provided, preserves directory structure relative to it.
+    """
     for f in to_sync:
-        _sync_remote_file(local_dir, f)
+        _sync_remote_file(local_dir, f, url=url, base_remote_dir=base_remote_dir)
 
 
-def down_by_time(*filters, remote_dir=DEFAULT_REMOTE_DIR, local_dir=".", count=1):
+def down_by_time(*filters, remote_dir=DEFAULT_REMOTE_DIR, local_dir=".", count=1,
+                 url=URL, recursive=False, **_):
     """Sync most recent file by date, time attribues"""
-    files = command.list_files(*filters, remote_dir=remote_dir)
+    if recursive:
+        files = command.list_files_recursive(*filters, remote_dir=remote_dir, url=url)
+    else:
+        files = command.list_files(*filters, remote_dir=remote_dir, url=url)
     most_recent = sorted(files, key=lambda f: f.datetime)
     to_sync = most_recent[-count:]
     _notify_sync(Direction.down, to_sync)
-    down_by_files(to_sync[::-1], local_dir=local_dir)
+    down_by_files(to_sync[::-1], local_dir=local_dir, url=url,
+                  base_remote_dir=remote_dir if recursive else None)
 
 
-def down_by_name(*filters, remote_dir=DEFAULT_REMOTE_DIR, local_dir=".", count=1):
+def down_by_name(*filters, remote_dir=DEFAULT_REMOTE_DIR, local_dir=".", count=1,
+                 url=URL, recursive=False, **_):
     """Sync files whose filename attribute is highest in alphanumeric order"""
-    files = command.list_files(*filters, remote_dir=remote_dir)
+    if recursive:
+        files = command.list_files_recursive(*filters, remote_dir=remote_dir, url=url)
+    else:
+        files = command.list_files(*filters, remote_dir=remote_dir, url=url)
     greatest = sorted(files, key=lambda f: f.filename)
     to_sync = greatest[-count:]
     _notify_sync(Direction.down, to_sync)
-    down_by_files(to_sync[::-1], local_dir=local_dir)
+    down_by_files(to_sync[::-1], local_dir=local_dir, url=url,
+                  base_remote_dir=remote_dir if recursive else None)
 
 
-def _sync_remote_file(local_dir, remote_file_info):
-    local = Path(local_dir, remote_file_info.filename)
+def _sync_remote_file(local_dir, remote_file_info, url=URL, base_remote_dir=None):
+    # Determine local path - preserve subdirectory structure if base_remote_dir is set
+    if base_remote_dir:
+        # Get relative path from base_remote_dir
+        remote_path = remote_file_info.directory
+        if remote_path.startswith(base_remote_dir):
+            relative_dir = remote_path[len(base_remote_dir):].lstrip('/')
+        else:
+            relative_dir = ""
+        if relative_dir:
+            local_subdir = Path(local_dir, relative_dir)
+            local_subdir.mkdir(parents=True, exist_ok=True)
+            local = Path(local_subdir, remote_file_info.filename)
+        else:
+            local = Path(local_dir, remote_file_info.filename)
+    else:
+        local = Path(local_dir, remote_file_info.filename)
+
     local_name = str(local)
     remote_size = remote_file_info.size
     if local.exists():
@@ -194,22 +228,22 @@ def _sync_remote_file(local_dir, remote_file_info):
                 "Removing {}: local size {} != remote size {}".format(
                 local_name, local_size, remote_size))
             os.remove(local_name)
-            _stream_to_file(local_name, remote_file_info)
+            _stream_to_file(local_name, remote_file_info, url=url)
     else:
-        _stream_to_file(local_name, remote_file_info)
+        _stream_to_file(local_name, remote_file_info, url=url)
 
 
-def _stream_to_file(local_name, fileinfo):
+def _stream_to_file(local_name, fileinfo, url=URL):
     logger.info("Copying remote file {} to {}".format(
                 fileinfo.path, local_name))
-    streaming_file = _get_file(fileinfo)
+    streaming_file = _get_file(fileinfo, url=url)
     _write_file_safely(local_name, fileinfo, streaming_file)
 
 
-def _get_file(fileinfo):
-    url = urljoin(URL, fileinfo.path)
-    logger.info("Requesting file: {}".format(url))
-    return requests.get(url, stream=True)
+def _get_file(fileinfo, url=URL):
+    file_url = urljoin(url, fileinfo.path)
+    logger.info("Requesting file: {}".format(file_url))
+    return requests.get(file_url, stream=True)
 
 
 def _write_file_safely(local_path, fileinfo, response):
@@ -266,55 +300,57 @@ def watch_local_files(*filters, local_dir="."):
         new_files = set(list_local())
 
 
-def watch_remote_files(*filters, remote_dir="."):
-    command.memory_changed()  # clear change status to start
+def watch_remote_files(*filters, remote_dir=".", url=URL):
+    command.memory_changed(url=url)  # clear change status to start
     list_remote = partial(command.list_files,
-                          *filters, remote_dir=remote_dir)
+                          *filters, remote_dir=remote_dir, url=url)
     old_files = new_files = set(list_remote())
     while True:
         yield new_files - old_files, new_files
         old_files = new_files
-        if command.memory_changed():
+        if command.memory_changed(url=url):
             new_files = set(list_remote())
 
 
 #####################################################
 # Synchronize ONCE in the UP direction (to FlashAir)
 
-def up_by_all(*filters, local_dir=".", remote_dir=DEFAULT_REMOTE_DIR, **_):
+def up_by_all(*filters, local_dir=".", remote_dir=DEFAULT_REMOTE_DIR, url=URL, **_):
     files = list_local_files(*filters, local_dir=local_dir)
-    up_by_files(list(files), remote_dir=remote_dir)
+    up_by_files(list(files), remote_dir=remote_dir, url=url)
 
 
-def up_by_files(to_sync, remote_dir=DEFAULT_REMOTE_DIR, remote_files=None):
+def up_by_files(to_sync, remote_dir=DEFAULT_REMOTE_DIR, remote_files=None, url=URL):
     """Sync a given list of local files to `remote_dir` dir"""
     if remote_files is None:
-        remote_files = command.map_files_raw(remote_dir=remote_dir)
+        remote_files = command.map_files_raw(remote_dir=remote_dir, url=url)
     for local_file in to_sync:
-        _sync_local_file(local_file, remote_dir, remote_files)
+        _sync_local_file(local_file, remote_dir, remote_files, url=url)
 
 
-def up_by_time(*filters, local_dir=".", remote_dir=DEFAULT_REMOTE_DIR, count=1):
+def up_by_time(*filters, local_dir=".", remote_dir=DEFAULT_REMOTE_DIR, count=1,
+               url=URL, **_):
     """Sync most recent file by date, time attribues"""
-    remote_files = command.map_files_raw(remote_dir=remote_dir)
+    remote_files = command.map_files_raw(remote_dir=remote_dir, url=url)
     local_files = list_local_files(*filters, local_dir=local_dir)
     most_recent = sorted(local_files, key=lambda f: f.datetime)
     to_sync = most_recent[-count:]
     _notify_sync(Direction.up, to_sync)
-    up_by_files(to_sync[::-1], remote_dir, remote_files)
+    up_by_files(to_sync[::-1], remote_dir, remote_files, url=url)
 
 
-def up_by_name(*filters, local_dir=".", remote_dir=DEFAULT_REMOTE_DIR, count=1):
+def up_by_name(*filters, local_dir=".", remote_dir=DEFAULT_REMOTE_DIR, count=1,
+               url=URL, **_):
     """Sync files whose filename attribute is highest in alphanumeric order"""
-    remote_files = command.map_files_raw(remote_dir=remote_dir)
+    remote_files = command.map_files_raw(remote_dir=remote_dir, url=url)
     local_files = list_local_files(*filters, local_dir=local_dir)
     greatest = sorted(local_files, key=lambda f: f.filename)
     to_sync = greatest[-count:]
     _notify_sync(Direction.up, to_sync)
-    up_by_files(to_sync[::-1], remote_dir, remote_files)
+    up_by_files(to_sync[::-1], remote_dir, remote_files, url=url)
 
 
-def _sync_local_file(local_file_info, remote_dir, remote_files):
+def _sync_local_file(local_file_info, remote_dir, remote_files, url=URL):
     local_name = local_file_info.filename
     local_size = local_file_info.size
     if local_name in remote_files:
@@ -329,28 +365,28 @@ def _sync_local_file(local_file_info, remote_dir, remote_files):
                 "Removing remote file {}: "
                 "local size {} != remote size {}".format(
                 local_name, local_size, remote_size))
-            upload.delete_file(remote_file_info.path)
-            _stream_from_file(local_file_info, remote_dir)
+            upload.delete_file(remote_file_info.path, url=url)
+            _stream_from_file(local_file_info, remote_dir, url=url)
     else:
-        _stream_from_file(local_file_info, remote_dir)
+        _stream_from_file(local_file_info, remote_dir, url=url)
 
 
-def _stream_from_file(fileinfo, remote_dir):
+def _stream_from_file(fileinfo, remote_dir, url=URL):
     logger.info("Uploading local file {} to {}".format(
                 fileinfo.path, remote_dir))
-    _upload_file_safely(fileinfo, remote_dir)
+    _upload_file_safely(fileinfo, remote_dir, url=url)
 
 
-def _upload_file_safely(fileinfo, remote_dir):
+def _upload_file_safely(fileinfo, remote_dir, url=URL):
     """attempts to upload a local file to FlashAir,
     tries to remove the remote file if interrupted by any error"""
     try:
-        upload.upload_file(fileinfo.path, remote_dir=remote_dir)
+        upload.upload_file(fileinfo.path, remote_dir=remote_dir, url=url)
     except BaseException as e:
         logger.warning("{} interrupted writing {} -- "
                        "cleaning up partial remote file".format(
                        e.__class__.__name__, fileinfo.path))
-        upload.delete_file(fileinfo.path)
+        upload.delete_file(fileinfo.path, url=url)
         raise e
 
 
