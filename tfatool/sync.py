@@ -81,7 +81,7 @@ class Monitor:
 
 
 def up_down_by_arrival(*filters, local_dir=".",
-                       remote_dir=DEFAULT_REMOTE_DIR, url=URL):
+                       remote_dir=DEFAULT_REMOTE_DIR, url=URL, recursive=False):
     """Monitors a local directory and a remote FlashAir directory and
     generates sets of new files to be uploaded or downloaded.
     Sets to upload are generated in a tuple
@@ -89,7 +89,8 @@ def up_down_by_arrival(*filters, local_dir=".",
     are generated in a tuple like (Direction.down, {...}). The generator yields
     before each upload or download actually takes place."""
     local_monitor = watch_local_files(*filters, local_dir=local_dir)
-    remote_monitor = watch_remote_files(*filters, remote_dir=remote_dir, url=url)
+    remote_monitor = watch_remote_files(*filters, remote_dir=remote_dir, url=url,
+                                        recursive=recursive)
     _, lfile_set = next(local_monitor)
     _, rfile_set = next(remote_monitor)
     _notify_sync_ready(len(lfile_set), local_dir, remote_dir)
@@ -111,11 +112,13 @@ def up_down_by_arrival(*filters, local_dir=".",
             new_names.update(f.filename for f in remote_arrivals)
             _notify_sync(Direction.down, remote_arrivals)
             yield Direction.down, remote_arrivals
-            down_by_files(remote_arrivals, local_dir, url=url)
+            down_by_files(remote_arrivals, local_dir, url=url,
+                          base_remote_dir=remote_dir if recursive else None)
             _notify_sync_ready(len(remote_set), remote_dir, local_dir)
 
 
-def up_by_arrival(*filters, local_dir=".", remote_dir=DEFAULT_REMOTE_DIR, url=URL):
+def up_by_arrival(*filters, local_dir=".", remote_dir=DEFAULT_REMOTE_DIR, url=URL,
+                  recursive=False):
     """Monitors a local directory and
     generates sets of new files to be uploaded to FlashAir.
     Sets to upload are generated in a tuple like (Direction.up, {...}).
@@ -131,18 +134,21 @@ def up_by_arrival(*filters, local_dir=".", remote_dir=DEFAULT_REMOTE_DIR, url=UR
             _notify_sync_ready(len(file_set), local_dir, remote_dir)
 
 
-def down_by_arrival(*filters, local_dir=".", remote_dir=DEFAULT_REMOTE_DIR, url=URL):
+def down_by_arrival(*filters, local_dir=".", remote_dir=DEFAULT_REMOTE_DIR,
+                    url=URL, recursive=False):
     """Monitors a remote FlashAir directory and generates sets of
     new files to be downloaded from FlashAir.
     Sets to download are generated in a tuple like (Direction.down, {...}).
     The generator yields AFTER each download actually takes place."""
-    remote_monitor = watch_remote_files(*filters, remote_dir=remote_dir, url=url)
+    remote_monitor = watch_remote_files(*filters, remote_dir=remote_dir, url=url,
+                                        recursive=recursive)
     _, file_set = next(remote_monitor)
     _notify_sync_ready(len(file_set), remote_dir, local_dir)
     for new_arrivals, file_set in remote_monitor:
         if new_arrivals:
             _notify_sync(Direction.down, new_arrivals)
-            down_by_files(new_arrivals, local_dir, url=url)
+            down_by_files(new_arrivals, local_dir, url=url,
+                          base_remote_dir=remote_dir if recursive else None)
             _notify_sync_ready(len(file_set), remote_dir, local_dir)
         yield Direction.down, new_arrivals
 
@@ -300,10 +306,10 @@ def watch_local_files(*filters, local_dir="."):
         new_files = set(list_local())
 
 
-def watch_remote_files(*filters, remote_dir=".", url=URL):
+def watch_remote_files(*filters, remote_dir=".", url=URL, recursive=False):
     command.memory_changed(url=url)  # clear change status to start
-    list_remote = partial(command.list_files,
-                          *filters, remote_dir=remote_dir, url=url)
+    list_func = command.list_files_recursive if recursive else command.list_files
+    list_remote = partial(list_func, *filters, remote_dir=remote_dir, url=url)
     old_files = new_files = set(list_remote())
     while True:
         yield new_files - old_files, new_files
